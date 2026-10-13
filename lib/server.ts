@@ -1,0 +1,9 @@
+import {env} from 'cloudflare:workers';
+import {getChatGPTUser} from '../app/chatgpt-auth';
+import {eventSchema,EventRecord} from './model';
+export const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+export async function authorize(req:Request,write=false){const user=await getChatGPTUser();if(!user)throw new HttpError(401,'Please sign in with ChatGPT.');if(write){const origin=req.headers.get('origin');if(!origin||origin!==new URL(req.url).origin)throw new HttpError(403,'This action must originate from this workspace.');}if(!env.DB)throw new HttpError(503,'Storage is not available. Please try again.');return {user,db:env.DB};}
+export class HttpError extends Error {constructor(public status:number,message:string){super(message)}}
+export function failure(e:unknown){if(e instanceof HttpError)return json({error:e.message},e.status);console.error('Request failed',e instanceof Error?e.name:'unknown');return json({error:'Unable to complete this request. Your last saved data is preserved.'},500);}
+export async function readBody(req:Request){if(!req.headers.get('content-type')?.includes('application/json'))throw new HttpError(415,'Expected JSON.');const text=await req.text();if(text.length>1000000)throw new HttpError(413,'Event is too large.');try{return JSON.parse(text);}catch{throw new HttpError(400,'Invalid request body.');}}
+export async function ownedEvent(db:D1Database,owner:string,id:string):Promise<EventRecord>{const row=await db.prepare('SELECT data, version, updated_at FROM events WHERE id = ? AND owner = ?').bind(id,owner).first<{data:string,version:number,updated_at:string}>();if(!row)throw new HttpError(404,'Event not found.');return {data:eventSchema.parse(JSON.parse(row.data)),version:row.version,updatedAt:row.updated_at};}
